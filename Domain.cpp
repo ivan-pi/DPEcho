@@ -13,6 +13,8 @@
 #include "Parameters.hpp"
 #include "Logger.hpp"
 
+#include <array>
+
 #if __has_include(<mdspan>)
 #include <mdspan>
 namespace mdspan_ns = std;
@@ -176,6 +178,11 @@ void Domain::BCex(int myDir, Grid gr, field_array &v, int dType){ // gr is the u
   using field_view = mdspan_ns::mdspan<field, mdspan_extent_1d>;
   using buffer_view = mdspan_ns::mdspan<field, mdspan_ns::extents<size_t, FLD_TOT, mdspan_ns::dynamic_extent>>;
   using layout_mapping = mdspan_ns::layout_right::mapping<mdspan_extent_3d>;
+  const size_t fullFieldExtent = static_cast<size_t>(gr.nht);
+  const std::array<field_view, FLD_TOT> fieldViews{
+    field_view(v[0], fullFieldExtent), field_view(v[1], fullFieldExtent), field_view(v[2], fullFieldExtent), field_view(v[3], fullFieldExtent),
+    field_view(v[4], fullFieldExtent), field_view(v[5], fullFieldExtent), field_view(v[6], fullFieldExtent), field_view(v[7], fullFieldExtent)
+  };
   const layout_mapping bufMap(mdspan_extent_3d(static_cast<size_t>(nBuf[0]), static_cast<size_t>(nBuf[1]), static_cast<size_t>(nBuf[2])));
   const layout_mapping fullGridMap(mdspan_extent_3d(static_cast<size_t>(gr.nh[0]), static_cast<size_t>(gr.nh[1]), static_cast<size_t>(gr.nh[2])));
   const auto linearBufId = [=](id<3> const idx) -> size_t {
@@ -201,8 +208,7 @@ void Domain::BCex(int myDir, Grid gr, field_array &v, int dType){ // gr is the u
     size_t iBufL = linearBufId(id), iBufR = reverseLinearBufId(id);
     size_t iVL   = linearGridId(id, nOffRead), iVR   = reverseLinearGridId(id, nOffRead);
     for(int iVar=0; iVar<FLD_TOT; ++iVar){
-      const field_view fieldValues(v[iVar], static_cast<size_t>(gr.nht));
-      leftSendView(iVar, iBufL) = fieldValues(iVL);
+      leftSendView(iVar, iBufL) = fieldViews[iVar](iVL);
 #if defined(MPICODE) && ( (MPICODE == ISEND) || (MPICODE == START) )
     }
   }).wait_and_throw();
@@ -217,8 +223,7 @@ void Domain::BCex(int myDir, Grid gr, field_array &v, int dType){ // gr is the u
     size_t iVL   = linearGridId(id, nOffRead), iVR   = reverseLinearGridId(id, nOffRead);
     for(int iVar=0; iVar<FLD_TOT; ++iVar){
 #endif
-      const field_view fieldValues(v[iVar], static_cast<size_t>(gr.nht));
-      rightSendView(iVar, iBufR) = fieldValues(iVR);
+      rightSendView(iVar, iBufR) = fieldViews[iVar](iVR);
     }
   }).wait_and_throw();
 
@@ -257,8 +262,7 @@ void Domain::BCex(int myDir, Grid gr, field_array &v, int dType){ // gr is the u
     size_t iVL   = linearGridId(id, nOffW), iVR   = reverseLinearGridId(id, nOffW);  // For the regular BCEX
     size_t iBufL = linearBufId(id), iBufR = reverseLinearBufId(id);  // The same, if we start from the end
     for(int iVar=0; iVar<FLD_TOT; ++iVar){
-      field_view fieldValues(v[iVar], static_cast<size_t>(gr.nht));
-      fieldValues(iVR) = leftRecvView(iVar, iBufR);  // ...besides the flipped assignments
+      fieldViews[iVar](iVR) = leftRecvView(iVar, iBufR);  // ...besides the flipped assignments
 #if defined(MPICODE) && ( (MPICODE == ISEND) || (MPICODE == START) )
     }
   }); // NO SYCL wait here!
@@ -269,8 +273,7 @@ void Domain::BCex(int myDir, Grid gr, field_array &v, int dType){ // gr is the u
     size_t iBufL = linearBufId(id), iBufR = reverseLinearBufId(id);  // The same, if we start from the end
     for(int iVar=0; iVar<FLD_TOT; ++iVar){
 #endif
-      field_view fieldValues(v[iVar], static_cast<size_t>(gr.nht));
-      fieldValues(iVL) = rightRecvView(iVar, iBufL);  // ACHTUNG: Must reverse both L<-->R and the indexes in them!
+      fieldViews[iVar](iVL) = rightRecvView(iVar, iBufL);  // ACHTUNG: Must reverse both L<-->R and the indexes in them!
     }
   }).wait_and_throw();
   switch(bcType_[myDir]){ //-- PROCESSING BC TYPEs
@@ -281,8 +284,7 @@ void Domain::BCex(int myDir, Grid gr, field_array &v, int dType){ // gr is the u
           id<3> readId, writeId = readId = it.get_id()  ;  readId[myDir]+= gr.h[myDir] - it.get_id(myDir);
           size_t iVL = linearGridIdNoOffset(writeId), iOut = linearGridIdNoOffset(readId);
           for(int iVar=0; iVar<FLD_TOT; ++iVar){
-            field_view fieldValues(v[iVar], static_cast<size_t>(gr.nht));
-            fieldValues(iVL) = fieldValues(iOut);
+            fieldViews[iVar](iVL) = fieldViews[iVar](iOut);
           };
         }).wait_and_throw();
       }
@@ -292,8 +294,7 @@ void Domain::BCex(int myDir, Grid gr, field_array &v, int dType){ // gr is the u
           id<3> readId, writeId = readId = it.get_id() + gridOffset;     readId[myDir] = readId[myDir] - it.get_id(myDir) - 1;
           size_t iVR = linearGridIdNoOffset(writeId), iOut = linearGridIdNoOffset(readId);
           for(int iVar=0; iVar<FLD_TOT; ++iVar){
-            field_view fieldValues(v[iVar], static_cast<size_t>(gr.nht));
-            fieldValues(iVR) = fieldValues(iOut);
+            fieldViews[iVar](iVR) = fieldViews[iVar](iOut);
           };
         }).wait_and_throw();
       }
@@ -305,13 +306,12 @@ void Domain::BCex(int myDir, Grid gr, field_array &v, int dType){ // gr is the u
         for(int iVar=0; iVar<FLD_TOT; ++iVar){
           qq.parallel_for(rPlane,[=](item<3> it){  // v -> WHindex
             id<3> myId = it.get_id();
-            field_view fieldValues(v[iVar], static_cast<size_t>(gr.nht));
             int iVL = static_cast<int>(linearGridIdNoOffset(myId));
             int step = stride(myId, myDir, gr.nh);
             for(int iLay=0; iLay<gr.h[myDir]; ++iLay){
-               fieldValues(static_cast<size_t>(iVL)) = -1*fieldValues(static_cast<size_t>(iVL+step))
-                                                     -3*fieldValues(static_cast<size_t>(iVL+2*step))
-                                                     +  fieldValues(static_cast<size_t>(iVL+3*step));
+               fieldViews[iVar](static_cast<size_t>(iVL)) = -1*fieldViews[iVar](static_cast<size_t>(iVL+step))
+                                                           -3*fieldViews[iVar](static_cast<size_t>(iVL+2*step))
+                                                           +  fieldViews[iVar](static_cast<size_t>(iVL+3*step));
                iVL+=-step;
               }
             });
@@ -324,13 +324,13 @@ void Domain::BCex(int myDir, Grid gr, field_array &v, int dType){ // gr is the u
           int iVL = static_cast<int>(linearGridIdNoOffset(myId));
           int step = stride(myId, myDir, gr.nh);
           for(int iVar=0; iVar<FLD_TOT; ++iVar){
-          field_view fieldValues(v[iVar], static_cast<size_t>(gr.nht));
-          for(int iLay=0; iLay<gr.h[myDir]; ++iLay){
-             fieldValues(static_cast<size_t>(iVL)) = -1*fieldValues(static_cast<size_t>(iVL-step))
-                                                   -3*fieldValues(static_cast<size_t>(iVL-2*step))
-                                                   +  fieldValues(static_cast<size_t>(iVL-3*step));
-             iVL+= step;
-          }}
+            for(int iLay=0; iLay<gr.h[myDir]; ++iLay){
+               fieldViews[iVar](static_cast<size_t>(iVL)) = -1*fieldViews[iVar](static_cast<size_t>(iVL-step))
+                                                           -3*fieldViews[iVar](static_cast<size_t>(iVL-2*step))
+                                                           +  fieldViews[iVar](static_cast<size_t>(iVL-3*step));
+               iVL+= step;
+            }
+          }
         }).wait_and_throw();
       }
       break;
