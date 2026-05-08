@@ -179,9 +179,9 @@ void Domain::BCex(int myDir, Grid gr, field_array &v, int dType){ // gr is the u
   using buffer_view = mdspan_ns::mdspan<field, mdspan_ns::extents<size_t, FLD_TOT, mdspan_ns::dynamic_extent>>;
   using layout_mapping = mdspan_ns::layout_right::mapping<mdspan_extent_3d>;
   const size_t fullFieldExtent = static_cast<size_t>(gr.nht);
-  auto fieldViews = std::array<field_view, FLD_TOT>{};
+  auto variableViews = std::array<field_view, FLD_TOT>{};
   for(int iVar=0; iVar<FLD_TOT; ++iVar){
-    fieldViews[iVar] = field_view(v[iVar], fullFieldExtent);
+    variableViews[iVar] = field_view(v[iVar], fullFieldExtent);
   }
   const layout_mapping bufLayoutMap(mdspan_extent_3d(static_cast<size_t>(nBuf[0]), static_cast<size_t>(nBuf[1]), static_cast<size_t>(nBuf[2])));
   const layout_mapping fullGridLayoutMap(mdspan_extent_3d(static_cast<size_t>(gr.nh[0]), static_cast<size_t>(gr.nh[1]), static_cast<size_t>(gr.nh[2])));
@@ -208,7 +208,7 @@ void Domain::BCex(int myDir, Grid gr, field_array &v, int dType){ // gr is the u
     size_t iBufL = linearBufId(id), iBufR = reverseLinearBufId(id);
     size_t iVL   = linearGridId(id, nOffRead), iVR   = reverseLinearGridId(id, nOffRead);
     for(int iVar=0; iVar<FLD_TOT; ++iVar){
-      leftSendView(iVar, iBufL) = fieldViews[iVar](iVL);
+      leftSendView(iVar, iBufL) = variableViews[iVar](iVL);
 #if defined(MPICODE) && ( (MPICODE == ISEND) || (MPICODE == START) )
     }
   }).wait_and_throw();
@@ -223,7 +223,7 @@ void Domain::BCex(int myDir, Grid gr, field_array &v, int dType){ // gr is the u
     size_t iVL   = linearGridId(id, nOffRead), iVR   = reverseLinearGridId(id, nOffRead);
     for(int iVar=0; iVar<FLD_TOT; ++iVar){
 #endif
-      rightSendView(iVar, iBufR) = fieldViews[iVar](iVR);
+      rightSendView(iVar, iBufR) = variableViews[iVar](iVR);
     }
   }).wait_and_throw();
 
@@ -262,7 +262,7 @@ void Domain::BCex(int myDir, Grid gr, field_array &v, int dType){ // gr is the u
     size_t iVL   = linearGridId(id, nOffW), iVR   = reverseLinearGridId(id, nOffW);  // For the regular BCEX
     size_t iBufL = linearBufId(id), iBufR = reverseLinearBufId(id);  // The same, if we start from the end
     for(int iVar=0; iVar<FLD_TOT; ++iVar){
-      fieldViews[iVar](iVR) = leftRecvView(iVar, iBufR);  // ...besides the flipped assignments
+      variableViews[iVar](iVR) = leftRecvView(iVar, iBufR);  // ...besides the flipped assignments
 #if defined(MPICODE) && ( (MPICODE == ISEND) || (MPICODE == START) )
     }
   }); // NO SYCL wait here!
@@ -273,7 +273,7 @@ void Domain::BCex(int myDir, Grid gr, field_array &v, int dType){ // gr is the u
     size_t iBufL = linearBufId(id), iBufR = reverseLinearBufId(id);  // The same, if we start from the end
     for(int iVar=0; iVar<FLD_TOT; ++iVar){
 #endif
-      fieldViews[iVar](iVL) = rightRecvView(iVar, iBufL);  // ACHTUNG: Must reverse both L<-->R and the indexes in them!
+      variableViews[iVar](iVL) = rightRecvView(iVar, iBufL);  // ACHTUNG: Must reverse both L<-->R and the indexes in them!
     }
   }).wait_and_throw();
   switch(bcType_[myDir]){ //-- PROCESSING BC TYPEs
@@ -284,8 +284,8 @@ void Domain::BCex(int myDir, Grid gr, field_array &v, int dType){ // gr is the u
           id<3> readId, writeId = readId = it.get_id()  ;  readId[myDir]+= gr.h[myDir] - it.get_id(myDir);
           size_t iVL = linearGridIdNoOffset(writeId), iOut = linearGridIdNoOffset(readId);
           for(int iVar=0; iVar<FLD_TOT; ++iVar){
-            fieldViews[iVar](iVL) = fieldViews[iVar](iOut);
-          };
+            variableViews[iVar](iVL) = variableViews[iVar](iOut);
+          }
         }).wait_and_throw();
       }
       if(isEdgeRight_[myDir]){
@@ -294,8 +294,8 @@ void Domain::BCex(int myDir, Grid gr, field_array &v, int dType){ // gr is the u
           id<3> readId, writeId = readId = it.get_id() + gridOffset;     readId[myDir] = readId[myDir] - it.get_id(myDir) - 1;
           size_t iVR = linearGridIdNoOffset(writeId), iOut = linearGridIdNoOffset(readId);
           for(int iVar=0; iVar<FLD_TOT; ++iVar){
-            fieldViews[iVar](iVR) = fieldViews[iVar](iOut);
-          };
+            variableViews[iVar](iVR) = variableViews[iVar](iOut);
+          }
         }).wait_and_throw();
       }
       break;
@@ -309,9 +309,9 @@ void Domain::BCex(int myDir, Grid gr, field_array &v, int dType){ // gr is the u
             int iVL = static_cast<int>(linearGridIdNoOffset(myId));
             int step = stride(myId, myDir, gr.nh);
             for(int iLay=0; iLay<gr.h[myDir]; ++iLay){
-               fieldViews[iVar](static_cast<size_t>(iVL)) = -1*fieldViews[iVar](static_cast<size_t>(iVL+step))
-                                                           -3*fieldViews[iVar](static_cast<size_t>(iVL+2*step))
-                                                           +  fieldViews[iVar](static_cast<size_t>(iVL+3*step));
+               variableViews[iVar](static_cast<size_t>(iVL)) = -1*variableViews[iVar](static_cast<size_t>(iVL+step))
+                                                              -3*variableViews[iVar](static_cast<size_t>(iVL+2*step))
+                                                              +  variableViews[iVar](static_cast<size_t>(iVL+3*step));
                iVL+=-step;
               }
             });
@@ -325,9 +325,9 @@ void Domain::BCex(int myDir, Grid gr, field_array &v, int dType){ // gr is the u
           int step = stride(myId, myDir, gr.nh);
           for(int iVar=0; iVar<FLD_TOT; ++iVar){
             for(int iLay=0; iLay<gr.h[myDir]; ++iLay){
-               fieldViews[iVar](static_cast<size_t>(iVL)) = -1*fieldViews[iVar](static_cast<size_t>(iVL-step))
-                                                           -3*fieldViews[iVar](static_cast<size_t>(iVL-2*step))
-                                                           +  fieldViews[iVar](static_cast<size_t>(iVL-3*step));
+               variableViews[iVar](static_cast<size_t>(iVL)) = -1*variableViews[iVar](static_cast<size_t>(iVL-step))
+                                                              -3*variableViews[iVar](static_cast<size_t>(iVL-2*step))
+                                                              +  variableViews[iVar](static_cast<size_t>(iVL-3*step));
                iVL+= step;
             }
           }
