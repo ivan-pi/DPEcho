@@ -196,7 +196,7 @@ if(METRIC STREQUAL KERR_SCHILD)
 endif()
 target_compile_definitions(dpecho PUBLIC METRIC=${METRIC})
 
-set(NRK_VALUES 1 2 3)
+set(NRK_VALUES 1 2 3 4 5)
 set(NRK 3 CACHE STRING "Order of RK scheme")
 set_property(CACHE NRK PROPERTY STRINGS ${NRK_VALUES})
 target_compile_definitions(dpecho PUBLIC NRK=${NRK})
