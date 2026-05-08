@@ -203,7 +203,8 @@ int main(int argc, char** argv ) {
           field uAcc = u0[i][myId] - brk[irk] * dtLoc * du[i][myId];
           u0[i][myId] = uAcc;
           if (irk < RK_STAGES-1){
-            u[i][myId] = uAcc + (brk[irk] - ark[irk]) * dtLoc * du[i][myId];
+            field stageCoeff = (brk[irk] - ark[irk]) * dtLoc;
+            u[i][myId] = uAcc + stageCoeff * du[i][myId];
           } else {
             u[i][myId] = uAcc;
           }
