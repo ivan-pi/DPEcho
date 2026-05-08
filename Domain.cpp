@@ -13,6 +13,18 @@
 #include "Parameters.hpp"
 #include "Logger.hpp"
 
+#include <array>
+
+#if __has_include(<mdspan>)
+#include <mdspan>
+namespace mdspan_ns = std;
+#elif __has_include(<experimental/mdspan>)
+#include <experimental/mdspan>
+namespace mdspan_ns = std::experimental;
+#else
+#error "DPEcho requires an mdspan implementation to build Domain::BCex."
+#endif
+
 using namespace sycl;
 
 Domain::~Domain( ){
@@ -160,14 +172,43 @@ void Domain::BCex(int myDir, Grid gr, field_array &v, int dType){ // gr is the u
 #endif
 #endif
   id<3> nOffRead = range<3>(nOff[0], nOff[1], nOff[2]); nOffRead[myDir] +=i0;
-  range<3> const fullGrR(gr.nh[0], gr.nh[1], gr.nh[2]); 
+  range<3> const fullGrR(gr.nh[0], gr.nh[1], gr.nh[2]);
+  using mdspan_extent_1d = mdspan_ns::extents<size_t, mdspan_ns::dynamic_extent>;
+  using mdspan_extent_3d = mdspan_ns::extents<size_t, mdspan_ns::dynamic_extent, mdspan_ns::dynamic_extent, mdspan_ns::dynamic_extent>;
+  using field_view = mdspan_ns::mdspan<field, mdspan_extent_1d>;
+  using buffer_view = mdspan_ns::mdspan<field, mdspan_ns::extents<size_t, FLD_TOT, mdspan_ns::dynamic_extent>>;
+  using layout_mapping = mdspan_ns::layout_right::mapping<mdspan_extent_3d>;
+  const size_t fullFieldExtent = static_cast<size_t>(gr.nht);
+  auto variableViews = std::array<field_view, FLD_TOT>{};
+  for(int iVar=0; iVar<FLD_TOT; ++iVar){
+    variableViews[iVar] = field_view(v[iVar], fullFieldExtent);
+  }
+  const layout_mapping bufLayoutMap(mdspan_extent_3d(static_cast<size_t>(nBuf[0]), static_cast<size_t>(nBuf[1]), static_cast<size_t>(nBuf[2])));
+  const layout_mapping fullGridLayoutMap(mdspan_extent_3d(static_cast<size_t>(gr.nh[0]), static_cast<size_t>(gr.nh[1]), static_cast<size_t>(gr.nh[2])));
+  const auto linearBufId = [bufLayoutMap](id<3> const idx) -> size_t {
+    return bufLayoutMap(idx[0], idx[1], idx[2]);
+  };
+  const auto reverseLinearBufId = [bufLayoutMap, rBuf](id<3> const idx) -> size_t {
+    return bufLayoutMap(rBuf[0] - 1 - idx[0], rBuf[1] - 1 - idx[1], rBuf[2] - 1 - idx[2]);
+  };
+  const auto linearGridId = [fullGridLayoutMap](id<3> const idx, id<3> const offset) -> size_t {
+    return fullGridLayoutMap(idx[0] + offset[0], idx[1] + offset[1], idx[2] + offset[2]);
+  };
+  const auto reverseLinearGridId = [fullGridLayoutMap, fullGrR](id<3> const idx, id<3> const offset) -> size_t {
+    return fullGridLayoutMap(fullGrR[0] - 1 - (idx[0] + offset[0]), fullGrR[1] - 1 - (idx[1] + offset[1]), fullGrR[2] - 1 - (idx[2] + offset[2]));
+  };
+  const auto linearGridIdNoOffset = [fullGridLayoutMap](id<3> const idx) -> size_t {
+    return fullGridLayoutMap(idx[0], idx[1], idx[2]);
+  };
+  const buffer_view leftSendView(bL, static_cast<size_t>(sBuf));
+  const buffer_view rightSendView(bR, static_cast<size_t>(sBuf));
   qq.parallel_for( ndr, [=](nd_item<3> it){
     id<3> id = it.get_global_id();
     if (isOutOfBounds(id, rBuf)) return;
-    size_t iBufL = globLinId(id, rBuf, sycl::id<3>(0,0,0)), iBufR = sBuf   -1 -iBufL; // The same, if we start from the end
-    size_t iVL   = globLinId(id, fullGrR, nOffRead), iVR   = gr.nht -1 -iVL;
+    size_t iBufL = linearBufId(id), iBufR = reverseLinearBufId(id);
+    size_t iVL   = linearGridId(id, nOffRead), iVR   = reverseLinearGridId(id, nOffRead);
     for(int iVar=0; iVar<FLD_TOT; ++iVar){
-      bL[iVar*sBuf+iBufL] = v[iVar][iVL];
+      leftSendView(iVar, iBufL) = variableViews[iVar](iVL);
 #if defined(MPICODE) && ( (MPICODE == ISEND) || (MPICODE == START) )
     }
   }).wait_and_throw();
@@ -177,11 +218,12 @@ void Domain::BCex(int myDir, Grid gr, field_array &v, int dType){ // gr is the u
   MPI_Start(&reqSendL[myDir]);
 #endif
   qq.parallel_for( rBuf, [=](item<3> it){
-    int iBufL = it.get_linear_id()        , iBufR = sBuf   -1 -iBufL; // The same, if we start from the end
-    int iVL   = globLinId(it, fullGrR, nOffRead), iVR   = gr.nht -1 -iVL;
+    id<3> id = it.get_id();
+    size_t iBufL = linearBufId(id), iBufR = reverseLinearBufId(id);
+    size_t iVL   = linearGridId(id, nOffRead), iVR   = reverseLinearGridId(id, nOffRead);
     for(int iVar=0; iVar<FLD_TOT; ++iVar){
 #endif
-      bR[iVar*sBuf+iBufR] = v[iVar][iVR];
+      rightSendView(iVar, iBufR) = variableViews[iVar](iVR);
     }
   }).wait_and_throw();
 
@@ -212,23 +254,26 @@ void Domain::BCex(int myDir, Grid gr, field_array &v, int dType){ // gr is the u
   Log::clog(8) << TAG << " Recopying from buffers..." << Log::endl;
   nOff[myDir] = 0; // To write, we start from 0
   id<3> nOffW = range<3>(nOff[0], nOff[1], nOff[2]);
+  const buffer_view leftRecvView(this->bufL, static_cast<size_t>(sBuf));
+  const buffer_view rightRecvView(this->bufR, static_cast<size_t>(sBuf));
   qq.parallel_for(ndr,[=,bL=this->bufL,bR=this->bufR](nd_item<3> it){  // v -> WHindex
     id<3> id = it.get_global_id();
     if (isOutOfBounds(id, rBuf)) return;
-    size_t iVL   = globLinId(id, fullGrR, nOffW), iVR   = gr.nht -1 -iVL  ;  // For the regular BCEX
-    size_t iBufL = globLinId(id, rBuf, sycl::id<3>(0,0,0)), iBufR = sBuf   -1 -iBufL;  // The same, if we start from the end
+    size_t iVL   = linearGridId(id, nOffW), iVR   = reverseLinearGridId(id, nOffW);  // For the regular BCEX
+    size_t iBufL = linearBufId(id), iBufR = reverseLinearBufId(id);  // The same, if we start from the end
     for(int iVar=0; iVar<FLD_TOT; ++iVar){
-      v[iVar][iVR] = bL[iVar*sBuf+iBufR];  // ...besides the flipped assignments
+      variableViews[iVar](iVR) = leftRecvView(iVar, iBufR);  // ...besides the flipped assignments
 #if defined(MPICODE) && ( (MPICODE == ISEND) || (MPICODE == START) )
     }
   }); // NO SYCL wait here!
   MPI_Wait (&reqRecvR[myDir],&status);
   qq.parallel_for(rBuf,[=,bL=this->bufL,bR=this->bufR](item<3> it){  // v -> WHindex
-    int iVL   = globLinId(it, fullGrR, nOffW), iVR   = gr.nht -1 -iVL  ;  // For the regular BCEX
-    int iBufL = it.get_linear_id(        ), iBufR = sBuf   -1 -iBufL;  // The same, if we start from the end
+    id<3> id = it.get_id();
+    size_t iVL   = linearGridId(id, nOffW), iVR   = reverseLinearGridId(id, nOffW);  // For the regular BCEX
+    size_t iBufL = linearBufId(id), iBufR = reverseLinearBufId(id);  // The same, if we start from the end
     for(int iVar=0; iVar<FLD_TOT; ++iVar){
 #endif
-      v[iVar][iVL] = bR[iVar*sBuf+iBufL];  // ACHTUNG: Must reverse both L<-->R and the indexes in them!
+      variableViews[iVar](iVL) = rightRecvView(iVar, iBufL);  // ACHTUNG: Must reverse both L<-->R and the indexes in them!
     }
   }).wait_and_throw();
   switch(bcType_[myDir]){ //-- PROCESSING BC TYPEs
@@ -237,16 +282,20 @@ void Domain::BCex(int myDir, Grid gr, field_array &v, int dType){ // gr is the u
       if(isEdgeLeft_[myDir]){
         qq.parallel_for(rBuf,[=](item<3> it){  // v -> WHindex
           id<3> readId, writeId = readId = it.get_id()  ;  readId[myDir]+= gr.h[myDir] - it.get_id(myDir);
-          int iVL = globLinId(writeId, gr.nh, nOff)     ,           iOut = globLinId(readId, gr.nh, nOff);
-          for(int iVar=0; iVar<FLD_TOT; ++iVar){ v[iVar][iVL] = v[iVar][iOut]; };
+          size_t iVL = linearGridIdNoOffset(writeId), iOut = linearGridIdNoOffset(readId);
+          for(int iVar=0; iVar<FLD_TOT; ++iVar){
+            variableViews[iVar](iVL) = variableViews[iVar](iOut);
+          }
         }).wait_and_throw();
       }
       if(isEdgeRight_[myDir]){
         qq.parallel_for(rBuf,[=](item<3> it){  // v -> WHindex
           id<3> gridOffset = id(0,0,0)                             ; gridOffset[myDir] =   gr.n[myDir] + gr.h[myDir];
           id<3> readId, writeId = readId = it.get_id() + gridOffset;     readId[myDir] = readId[myDir] - it.get_id(myDir) - 1;
-          int       iVR = globLinId(writeId, gr.nh, nOff)  ,                      iOut = globLinId(readId, gr.nh, nOff);
-          for(int iVar=0; iVar<FLD_TOT; ++iVar){ v[iVar][iVR] = v[iVar][iOut]; };
+          size_t iVR = linearGridIdNoOffset(writeId), iOut = linearGridIdNoOffset(readId);
+          for(int iVar=0; iVar<FLD_TOT; ++iVar){
+            variableViews[iVar](iVR) = variableViews[iVar](iOut);
+          }
         }).wait_and_throw();
       }
       break;
@@ -257,24 +306,31 @@ void Domain::BCex(int myDir, Grid gr, field_array &v, int dType){ // gr is the u
         for(int iVar=0; iVar<FLD_TOT; ++iVar){
           qq.parallel_for(rPlane,[=](item<3> it){  // v -> WHindex
             id<3> myId = it.get_id();
-            int iVL = globLinId(myId, gr.nh, nOff), step = stride(myId, myDir, gr.nh);
+            int iVL = static_cast<int>(linearGridIdNoOffset(myId));
+            int step = stride(myId, myDir, gr.nh);
             for(int iLay=0; iLay<gr.h[myDir]; ++iLay){
-               v[iVar][iVL] = -1*v[iVar][iVL+step] -3*v[iVar][iVL+2*step] + v[iVar][iVL+3*step];
+               variableViews[iVar](static_cast<size_t>(iVL)) = -1*variableViews[iVar](static_cast<size_t>(iVL+step))
+                                                              -3*variableViews[iVar](static_cast<size_t>(iVL+2*step))
+                                                              +  variableViews[iVar](static_cast<size_t>(iVL+3*step));
                iVL+=-step;
-            }
-          });
+              }
+            });
         }; qq.wait_and_throw();
       }
       if(isEdgeRight_[myDir]){
         qq.parallel_for(rBuf,[=](item<3> it){  // v -> WHindex
           id<3> gridOffset = id(0,0,0);  gridOffset[myDir] = gr.n[myDir] + gr.h[myDir];
           id<3> myId = it.get_id() + gridOffset;
-          int iVL = globLinId(myId, gr.nh, nOff), step = stride(myId, myDir, gr.nh);
+          int iVL = static_cast<int>(linearGridIdNoOffset(myId));
+          int step = stride(myId, myDir, gr.nh);
           for(int iVar=0; iVar<FLD_TOT; ++iVar){
-          for(int iLay=0; iLay<gr.h[myDir]; ++iLay){
-             v[iVar][iVL] = -1*v[iVar][iVL-step] -3*v[iVar][iVL-2*step] + v[iVar][iVL-3*step];
-             iVL+= step;
-          }}
+            for(int iLay=0; iLay<gr.h[myDir]; ++iLay){
+               variableViews[iVar](static_cast<size_t>(iVL)) = -1*variableViews[iVar](static_cast<size_t>(iVL-step))
+                                                              -3*variableViews[iVar](static_cast<size_t>(iVL-2*step))
+                                                              +  variableViews[iVar](static_cast<size_t>(iVL-3*step));
+               iVL+= step;
+            }
+          }
         }).wait_and_throw();
       }
       break;
