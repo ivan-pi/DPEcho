@@ -71,7 +71,7 @@ const float brk[] = {
   3559252274877.0f/14424734981077.0f
 };
 #else
-#error "Unsupported NRK value"
+#error "NRK must be 1, 2, 3, 4, or 5"
 #endif
 
 // Only those called directly outside Solver.cpp needed.
