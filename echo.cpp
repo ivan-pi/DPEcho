@@ -104,7 +104,7 @@ int main(int argc, char** argv ) {
   Log::togglePcontrol(1); // start profiling
   while( (problem.t() <= problem.tMax()) && (problem.iStep() < problem.nStep()) ){
 
-    for (int irk = 0; irk < NRK; irk++){  // RK loop
+    for (int irk = 0; irk < RK_STAGES; irk++){  // RK loop
       if (!irk){ aMax[0]=0.0; aMax[1]=0.0; aMax[2]=0.0; }
 
       for(unsigned myDir=0; myDir<3; myDir++){ // Direction loop
@@ -184,9 +184,9 @@ int main(int argc, char** argv ) {
         qDev.wait_and_throw();
       }
 
+#if NRK <= 3
       qDev.parallel_for<class parForRK>(rStd, [=](item<3> it) { //-- Updating RK
         id<3> id = it.get_id();
-        range<3> ar = it.get_range();
         if (isOutOfBounds(id, rStd)){ return; }
         int myId = globLinId(it.get_id(), grid.nh, grid.h ); // Accessing v, u and the like
         for (int i=0; i<FLD_TOT; ++i)
@@ -194,6 +194,24 @@ int main(int argc, char** argv ) {
         Metric g(grid.xC(id, 0), grid.xC(id, 1), grid.xC(id, 2));
         cons2prim(myId, Ncell, u, v, g);
       }).wait_and_throw();
+#else
+      qDev.parallel_for<class parForRKLS>(rStd, [=](item<3> it) { //-- Updating low-storage RK(4/5)
+        id<3> id = it.get_id();
+        if (isOutOfBounds(id, rStd)){ return; }
+        int myId = globLinId(it.get_id(), grid.nh, grid.h ); // Accessing v, u and the like
+        for (int i=0; i<FLD_TOT; ++i){
+          field uAcc = u0[i][myId] - brk[irk] * dtLoc * du[i][myId];
+          u0[i][myId] = uAcc;
+          if (irk < RK_STAGES-1){
+            u[i][myId] = uAcc + (brk[irk] - ark[irk]) * dtLoc * du[i][myId];
+          } else {
+            u[i][myId] = uAcc;
+          }
+        }
+        Metric g(grid.xC(id, 0), grid.xC(id, 1), grid.xC(id, 2));
+        cons2prim(myId, Ncell, u, v, g);
+      }).wait_and_throw();
+#endif
 
       for(unsigned myDir=0; myDir<3; myDir++) { DD->BCex(myDir, grid, v); }
 
