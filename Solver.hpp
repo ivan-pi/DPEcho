@@ -30,7 +30,7 @@ const float crk1[] = {0.0, 0.75, 1.0/3.0};
 const float crk2[] = {1.0, 0.25, 2.0/3.0};
 #elif NRK==4
 constexpr int RK_STAGES = 5;
-// RK4(3)5[2R+]C, Kennedy/Carpenter/Lewis (low-storage, 2-register)
+// RK4(3)5[2R+]C, Kennedy/Carpenter/Lewis (low-storage, 2-register, 5 stages)
 // `ark` has RK_STAGES-1 entries (a_i), `brk` has RK_STAGES entries (b_i).
 const float ark[] = {
   970286171893.0f/4311952581923.0f,
@@ -47,7 +47,7 @@ const float brk[] = {
 };
 #elif NRK==5
 constexpr int RK_STAGES = 9;
-// RK5(4)9[2R+]S, Kennedy/Carpenter/Lewis (low-storage, 2-register)
+// RK5(4)9[2R+]S, Kennedy/Carpenter/Lewis (low-storage, 2-register, 9 stages)
 // `ark` has RK_STAGES-1 entries (a_i), `brk` has RK_STAGES entries (b_i).
 const float ark[] = {
   1107026461565.0f/5417078080134.0f,
