@@ -183,22 +183,22 @@ void Domain::BCex(int myDir, Grid gr, field_array &v, int dType){ // gr is the u
     field_view(v[0], fullFieldExtent), field_view(v[1], fullFieldExtent), field_view(v[2], fullFieldExtent), field_view(v[3], fullFieldExtent),
     field_view(v[4], fullFieldExtent), field_view(v[5], fullFieldExtent), field_view(v[6], fullFieldExtent), field_view(v[7], fullFieldExtent)
   };
-  const layout_mapping bufMap(mdspan_extent_3d(static_cast<size_t>(nBuf[0]), static_cast<size_t>(nBuf[1]), static_cast<size_t>(nBuf[2])));
-  const layout_mapping fullGridMap(mdspan_extent_3d(static_cast<size_t>(gr.nh[0]), static_cast<size_t>(gr.nh[1]), static_cast<size_t>(gr.nh[2])));
-  const auto linearBufId = [=](id<3> const idx) -> size_t {
-    return bufMap(idx[0], idx[1], idx[2]);
+  const layout_mapping bufLayoutMap(mdspan_extent_3d(static_cast<size_t>(nBuf[0]), static_cast<size_t>(nBuf[1]), static_cast<size_t>(nBuf[2])));
+  const layout_mapping fullGridLayoutMap(mdspan_extent_3d(static_cast<size_t>(gr.nh[0]), static_cast<size_t>(gr.nh[1]), static_cast<size_t>(gr.nh[2])));
+  const auto linearBufId = [bufLayoutMap](id<3> const idx) -> size_t {
+    return bufLayoutMap(idx[0], idx[1], idx[2]);
   };
-  const auto reverseLinearBufId = [=](id<3> const idx) -> size_t {
-    return bufMap(rBuf[0] - 1 - idx[0], rBuf[1] - 1 - idx[1], rBuf[2] - 1 - idx[2]);
+  const auto reverseLinearBufId = [bufLayoutMap, rBuf](id<3> const idx) -> size_t {
+    return bufLayoutMap(rBuf[0] - 1 - idx[0], rBuf[1] - 1 - idx[1], rBuf[2] - 1 - idx[2]);
   };
-  const auto linearGridId = [=](id<3> const idx, id<3> const offset) -> size_t {
-    return fullGridMap(idx[0] + offset[0], idx[1] + offset[1], idx[2] + offset[2]);
+  const auto linearGridId = [fullGridLayoutMap](id<3> const idx, id<3> const offset) -> size_t {
+    return fullGridLayoutMap(idx[0] + offset[0], idx[1] + offset[1], idx[2] + offset[2]);
   };
-  const auto reverseLinearGridId = [=](id<3> const idx, id<3> const offset) -> size_t {
-    return fullGridMap(fullGrR[0] - 1 - (idx[0] + offset[0]), fullGrR[1] - 1 - (idx[1] + offset[1]), fullGrR[2] - 1 - (idx[2] + offset[2]));
+  const auto reverseLinearGridId = [fullGridLayoutMap, fullGrR](id<3> const idx, id<3> const offset) -> size_t {
+    return fullGridLayoutMap(fullGrR[0] - 1 - (idx[0] + offset[0]), fullGrR[1] - 1 - (idx[1] + offset[1]), fullGrR[2] - 1 - (idx[2] + offset[2]));
   };
-  const auto linearGridIdNoOffset = [=](id<3> const idx) -> size_t {
-    return fullGridMap(idx[0], idx[1], idx[2]);
+  const auto linearGridIdNoOffset = [fullGridLayoutMap](id<3> const idx) -> size_t {
+    return fullGridLayoutMap(idx[0], idx[1], idx[2]);
   };
   const buffer_view leftSendView(bL, static_cast<size_t>(sBuf));
   const buffer_view rightSendView(bR, static_cast<size_t>(sBuf));
